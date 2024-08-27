@@ -1,0 +1,9 @@
+Llm:
+    name: llama
+    mod: cpu
+Log:
+    level: info
+    size: 3M
+    lfile: /tmp/ryai.log
+    num: 5
+    age: 30
