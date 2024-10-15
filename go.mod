@@ -1,6 +1,6 @@
 module github.com/superryanguo/ryai
 
-go 1.22rc2
+go 1.23rc1
 
 require (
 	github.com/spf13/cobra v1.8.1
