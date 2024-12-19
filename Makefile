@@ -3,13 +3,23 @@ SHELL:=/bin/sh
 
 export GO111MODULE=on
 
+OS := $(shell uname)
+TARGET := linux
+ifeq ($(OS), Darwin)
+    TARGET := darwin
+else ifeq ($(OS), Linux)
+    TARGET := linux
+else ifeq ($(OS), Windows_NT)
+    TARGET := windows
+endif
+
 # Path Related
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
 RELEASE_DIR := ${MKFILE_DIR}bin
 GO_PATH := $(shell go env | grep GOPATH | awk -F '"' '{print $$2}')
 VERSION=$(shell git describe --tags --dirty || echo "unknown version, pls tag")
-BDTIME=$(shell date --utc "+%Y-%m-%d %H:%M:%S" || echo "unknown date")
+BDTIME=$(shell date -u "+%Y-%m-%d %H:%M:%S" || echo "unknown date")
 GOBUILD=go build -v -trimpath -ldflags '-X "github.com/superryanguo/ryai/utils.Version=$(VERSION)" \
 		-X "github.com/superryanguo/ryai/utils.BuildTime=$(BDTIME)" \
 		-w -s -buildid=$(VERSION)'
@@ -31,8 +41,15 @@ endif
 # Rules
 ryai: main.go
 	cd ${MKFILE_DIR} && \
+	$(GOBUILD) -o $(RELEASE_DIR)/$@
+
+ryai-linux: main.go
+	cd ${MKFILE_DIR} && \
 	GOOS=linux $(GOBUILD) -o $(RELEASE_DIR)/$@
 
+ryai-mac: main.go
+	cd ${MKFILE_DIR} && \
+	GOOS=darwin $(GOBUILD) -o $(RELEASE_DIR)/$@
 test:
 	cd ${MKFILE_DIR}
 	go mod tidy
