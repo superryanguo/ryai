@@ -2,14 +2,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package storage defines the storage abstractions needed for Gaby:
+// Package storage defines the storage abstractions needed for Oscar:
 // [DB], a basic key-value store, and [VectorDB], a vector database.
 // The storage needs are intentionally minimal (avoiding, for example,
 // a requirement on SQL), to admit as many implementations as possible.
 package storage
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -27,11 +26,10 @@ import (
 // if there is an error accessing the database.
 // The assumption is that the program cannot possibly
 // continue without the database, since that's where all the state is stored.
-// Similarly, clients of DB conventionally panic if the database
-// returned corrupted data.
+// Similarly, clients of DB conventionally panic
+// using [DB.Panic] if the database returns corrupted data.
 // Code using multiple parallel database operations can recover
 // at the outermost calls.
-// Clients of DB
 type DB interface {
 	// Lock acquires a lock on the given name, which need not exist in the database.
 	// After a successful Lock(name),
@@ -47,6 +45,7 @@ type DB interface {
 	Unlock(name string)
 
 	// Set sets the value associated with key to val.
+	// The key must not be of length zero.
 	Set(key, val []byte)
 
 	// Get looks up the value associated with key.
@@ -65,6 +64,9 @@ type DB interface {
 	//
 	// In iterations that only need the keys or only need the values for a subset of keys,
 	// some DB implementations may avoid work when the value function is not called.
+	//
+	// A Scan may or may not observe concurrent modifications made
+	// using Set, Delete, and DeleteRange.
 	Scan(start, end []byte) iter.Seq2[[]byte, func() []byte]
 
 	// Delete deletes any value associated with key.
@@ -85,7 +87,7 @@ type DB interface {
 	// or else any changes since the previous Flush may be lost.
 	Flush()
 
-	// Close closes the database.
+	// Close flushes and then closes the database.
 	// Like the other routines, it panics if an error happens,
 	// so there is no error result.
 	Close()
@@ -93,7 +95,7 @@ type DB interface {
 	// Panic logs the error message and args using the database's slog.Logger
 	// and then panics with the text formatting of its arguments.
 	// It is meant to be called when database corruption or other
-	// database-related “can't happen” conditions been detected.
+	// database-related “can't happen” conditions have been detected.
 	Panic(msg string, args ...any)
 }
 
@@ -107,12 +109,18 @@ type DB interface {
 type Batch interface {
 	// Delete deletes any value associated with key.
 	// Delete of an unset key is a no-op.
+	//
+	// Delete does not retain any reference to key after returning.
 	Delete(key []byte)
 
 	// DeleteRange deletes all key-value pairs with start ≤ key ≤ end.
+	//
+	// DeleteRange does not retain any reference to start or end after returning.
 	DeleteRange(start, end []byte)
 
 	// Set sets the value associated with key to val.
+	//
+	// Set does not retain any reference to key or val after returning.
 	Set(key, val []byte)
 
 	// MaybeApply calls Apply if the batch is getting close to full.
@@ -139,7 +147,7 @@ type Batch interface {
 // Panic is expected to be used by DB implementations.
 // DB clients should use the [DB.Panic] method instead.
 func Panic(msg string, args ...any) {
-	var b bytes.Buffer
+	var b strings.Builder
 	slog.New(slog.NewTextHandler(&b, nil)).Error(msg, args...)
 	s := b.String()
 	if _, rest, ok := strings.Cut(s, " level=ERROR msg="); ok {

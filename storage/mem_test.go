@@ -7,11 +7,13 @@ package storage
 import (
 	"testing"
 
-	"rsc.io/gaby/internal/testutil"
+	"github.com/superryanguo/ryai/testutil"
 )
 
 func TestMemDB(t *testing.T) {
-	TestDB(t, MemDB())
+	db := MemDB()
+	TestDB(t, db)
+	TestDBLock(t, db)
 }
 
 func TestMemVectorDB(t *testing.T) {

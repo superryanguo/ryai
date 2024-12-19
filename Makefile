@@ -1,4 +1,4 @@
-SHELL:=/bin/bash
+SHELL:=/bin/sh
 .PHONY: ryai test clean
 
 export GO111MODULE=on
@@ -8,7 +8,7 @@ MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 MKFILE_DIR := $(dir $(MKFILE_PATH))
 RELEASE_DIR := ${MKFILE_DIR}bin
 GO_PATH := $(shell go env | grep GOPATH | awk -F '"' '{print $$2}')
-VERSION=$(shell git describe --tags --dirty || echo "unknown version")
+VERSION=$(shell git describe --tags --dirty || echo "unknown version, pls tag")
 BDTIME=$(shell date --utc "+%Y-%m-%d %H:%M:%S" || echo "unknown date")
 GOBUILD=go build -v -trimpath -ldflags '-X "github.com/superryanguo/ryai/utils.Version=$(VERSION)" \
 		-X "github.com/superryanguo/ryai/utils.BuildTime=$(BDTIME)" \

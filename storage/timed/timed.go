@@ -32,7 +32,7 @@
 //
 // The basic [Get], [Set], [Scan], [Delete], and [DeleteRange] functions
 // are analogous to those in [storage.DB]
-// but modified to accomodate the new entries:
+// but modified to accommodate the new entries:
 //
 //   - Get(db, kind, key) returns an *Entry.
 //     The db is the underlying storage being used.
@@ -63,10 +63,11 @@ package timed
 
 import (
 	"iter"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
-	"rsc.io/gaby/internal/storage"
+	"github.com/superryanguo/ryai/storage"
 	"rsc.io/ordered"
 )
 
@@ -81,7 +82,7 @@ var lastTime atomic.Int64
 
 // now returns the current DBTime.
 // The implementation assumes accurate time-keeping on the systems where it runs,
-// so that if Gaby is restarted, the new instance will not see times before
+// so that if the program is restarted, the new instance will not see times before
 // the ones the old instance did.
 //
 // Packages storing information in the database can create separate
@@ -109,7 +110,8 @@ type Entry struct {
 
 // Set adds to b the database updates to set (kind, key) → val,
 // including updating the time index.
-func Set(db storage.DB, b storage.Batch, kind string, key, val []byte) {
+// It returns the DBTime associated with the entry.
+func Set(db storage.DB, b storage.Batch, kind string, key, val []byte) DBTime {
 	t := now()
 	dkey := append(ordered.Encode(kind), key...)
 	if old, ok := db.Get(dkey); ok {
@@ -122,6 +124,7 @@ func Set(db storage.DB, b storage.Batch, kind string, key, val []byte) {
 	}
 	b.Set(append(ordered.Encode(kind+"ByTime", int64(t)), key...), nil)
 	b.Set(dkey, append(ordered.Encode(int64(t)), val...))
+	return t
 }
 
 // Delete adds to b the database updates to delete the value corresponding to (kind, key), if any.
@@ -200,10 +203,10 @@ func DeleteRange(db storage.DB, b storage.Batch, kind string, start, end []byte)
 // of the given kind that were set after DBTime t.
 // If filter is non-nil, ScanAfter omits entries for which filter(e.Key) returns false
 // and avoids the overhead of loading e.Val for those entries.
-func ScanAfter(db storage.DB, kind string, t DBTime, filter func(key []byte) bool) iter.Seq[*Entry] {
+func ScanAfter(lg *slog.Logger, db storage.DB, kind string, t DBTime, filter func(key []byte) bool) iter.Seq[*Entry] {
 	return func(yield func(*Entry) bool) {
 		start, end := ordered.Encode(kind+"ByTime", int64(t+1)), ordered.Encode(kind+"ByTime", ordered.Inf)
-		for tkey, _ := range db.Scan(start, end) {
+		for tkey := range db.Scan(start, end) {
 			var t int64
 			key, err := ordered.DecodePrefix(tkey, nil, &t) // drop kind
 			if err != nil {
@@ -219,6 +222,7 @@ func ScanAfter(db storage.DB, kind string, t DBTime, filter func(key []byte) boo
 				// Stale entries might happen if Set is called multiple times
 				// for the same key in a single batch, along with a later Delete,
 				// or Set+Delete in a single batch. Ignore.
+				lg.Info("timed stale missing", "tkey", storage.Fmt(tkey), "dkey", storage.Fmt(dkey))
 				continue
 			}
 			var t2 int64
@@ -233,6 +237,7 @@ func ScanAfter(db storage.DB, kind string, t DBTime, filter func(key []byte) boo
 				// The second Set will not see the first one's time entry to delete it.
 				// These should be rare.
 				// Skip this one and wait until we see the index entry for t2.
+				lg.Info("timed stale out of order", "tkey", storage.Fmt(tkey), "dkey", storage.Fmt(dkey), "dval-time", t2)
 				continue
 			}
 			if t > t2 {
@@ -265,11 +270,13 @@ func ScanAfter(db storage.DB, kind string, t DBTime, filter func(key []byte) boo
 // and while a Watcher is iterating, it locks a database lock
 // with the same name as that key.
 type Watcher[T any] struct {
+	slog   *slog.Logger
 	db     storage.DB
 	dkey   []byte
 	kind   string
 	decode func(*Entry) T
 	locked atomic.Bool
+	latest atomic.Int64 // highest known DBTime marked old, for fast retrieval by metrics
 }
 
 // NewWatcher returns a new named Watcher reading keys of the given kind from db.
@@ -280,13 +287,17 @@ type Watcher[T any] struct {
 //
 // The Watcher applies decode(e) to each time-stamped Entry to obtain the T returned
 // in the iteration.
-func NewWatcher[T any](db storage.DB, name, kind string, decode func(*Entry) T) *Watcher[T] {
-	return &Watcher[T]{
+func NewWatcher[T any](lg *slog.Logger, db storage.DB, name, kind string, decode func(*Entry) T) *Watcher[T] {
+	w := &Watcher[T]{
+		slog:   lg,
 		db:     db,
 		dkey:   ordered.Encode(kind+"Watcher", name),
 		kind:   kind,
 		decode: decode,
 	}
+	// Set w.latest to current DB value.
+	w.cutoffUnlocked()
+	return w
 }
 
 func (w *Watcher[T]) lock() {
@@ -310,12 +321,22 @@ func (w *Watcher[T]) cutoff() DBTime {
 		// unreachable unless called wrong in this file
 		w.db.Panic("timed.Watcher not locked")
 	}
+	return w.cutoffUnlocked()
+}
+
+// cutoffUnlocked returns the value of the watcher key in the DB.
+// (The key is the maximum of calls to [Watcher.MarkOld].)
+// It also updates [Watcher.latest].
+func (w *Watcher[T]) cutoffUnlocked() DBTime {
 	var t int64
 	if dval, ok := w.db.Get(w.dkey); ok {
 		if err := ordered.Decode(dval, &t); err != nil {
 			// unreachable unless corrupt storage
 			w.db.Panic("watcher decode", "dval", storage.Fmt(dval), "err", err)
 		}
+	}
+	if w.latest.Load() < t {
+		w.latest.Store(t)
 	}
 	return DBTime(t)
 }
@@ -332,7 +353,7 @@ func (w *Watcher[T]) cutoff() DBTime {
 // The iterator must be used from only a single goroutine at a time,
 // or else it will panic reporting “Watcher already locked”.
 // This means that while an iterator can be used multiple times in
-// sequence, it cannto be used from multiple goroutines,
+// sequence, it cannot be used from multiple goroutines,
 // nor can a new iteration be started inside an existing one.
 // (If a different process holds the lock, the iterator will wait for that process.
 // The in-process lock check aims to diagnose simple deadlocks.)
@@ -344,7 +365,7 @@ func (w *Watcher[T]) Recent() iter.Seq[T] {
 			w.unlock()
 		}()
 
-		for t := range ScanAfter(w.db, w.kind, w.cutoff(), nil) {
+		for t := range ScanAfter(w.slog, w.db, w.kind, w.cutoff(), nil) {
 			if !yield(w.decode(t)) {
 				return
 			}
@@ -372,7 +393,7 @@ func (w *Watcher[T]) Restart() {
 // If a newer time t has already been marked “old” in this watcher,
 // then MarkOld(t) is a no-op.
 //
-// MarkOld must be called during an iteration over Recent,
+// MarkOld must only be called during an iteration over Recent,
 // so that the database lock corresponding to this Watcher is held.
 // In the case of a process crash before the iteration completes,
 // the effect of MarkOld may be lost.
@@ -385,6 +406,7 @@ func (w *Watcher[T]) MarkOld(t DBTime) {
 		return
 	}
 	w.db.Set(w.dkey, ordered.Encode(int64(t)))
+	w.latest.Store(int64(t))
 }
 
 // Flush flushes the definition of recent (changed by MarkOld) to the database.
@@ -392,4 +414,10 @@ func (w *Watcher[T]) MarkOld(t DBTime) {
 // but it can be called explicitly during a long iteration as well.
 func (w *Watcher[T]) Flush() {
 	w.db.Flush()
+}
+
+// Latest returns the latest known DBTime marked old by the Watcher.
+// It does not require the lock to be held.
+func (w *Watcher[T]) Latest() DBTime {
+	return DBTime(w.latest.Load())
 }

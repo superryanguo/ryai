@@ -9,12 +9,15 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/superryanguo/ryai/testutil"
 	"rsc.io/ordered"
 )
 
 // TestDB runs basic tests on db.
 // It should be empty when TestDB is called.
+// To run tests on Lock and Unlock, also call [TestDBLock].
 func TestDB(t *testing.T, db DB) {
 	db.Set([]byte("key"), []byte("value"))
 	if val, ok := db.Get([]byte("key")); string(val) != "value" || ok != true {
@@ -25,6 +28,11 @@ func TestDB(t *testing.T, db DB) {
 		// unreachable except for bad db
 		t.Fatalf("Get(missing) = %v, %v, want nil, false", val, ok)
 	}
+
+	testutil.StopPanic(func() {
+		db.Set(nil, []byte{0})
+		t.Fatal("Set with nil key did not panic")
+	})
 
 	db.Delete([]byte("key"))
 	if val, ok := db.Get([]byte("key")); val != nil || ok != false {
@@ -38,6 +46,11 @@ func TestDB(t *testing.T, db DB) {
 		b.MaybeApply()
 	}
 	b.Apply()
+
+	testutil.StopPanic(func() {
+		b.Set(nil, []byte{0})
+		t.Fatal("Set with nil key did not panic")
+	})
 
 	collect := func(min, max, stop int) []int {
 		t.Helper()
@@ -70,6 +83,16 @@ func TestDB(t *testing.T, db DB) {
 		t.Fatalf("Scan(3, 6) with break at 5 = %v, want %v", scan, want)
 	}
 
+	// Passing a zero-length value for end to Scan will return an empty sequence.
+	something := false
+	for range db.Scan(nil, nil) {
+		something = true
+		break
+	}
+	if something {
+		t.Fatal("Scan(nil, nil) returned a non-empty sequence, want an empty one")
+	}
+
 	db.DeleteRange(ordered.Encode(4), ordered.Encode(7))
 	if scan, want := collect(-1, 11, -1), []int{0, 1, 2, 3, 8, 9}; !slices.Equal(scan, want) {
 		// unreachable except for bad db
@@ -88,10 +111,19 @@ func TestDB(t *testing.T, db DB) {
 		t.Fatalf("Scan(-1, 11) after batch Delete+Set = %v, want %v", scan, want)
 	}
 
+	// Check that batch.Apply clears the batch.
+	k := ordered.Encode("a")
+	b = db.Batch()
+	b.Set(k, []byte{0})
+	b.Apply()
+	db.Delete(k)
+	b.Apply() // should be a no-op
+	if _, ok := db.Get(k); ok {
+		t.Fatalf("empty Apply should be no-op, but got previous value")
+	}
+
 	// Can't test much, but check that it doesn't crash.
 	db.Flush()
-
-	testDBLock(t, db)
 }
 
 type locker interface {
@@ -99,28 +131,37 @@ type locker interface {
 	Unlock(string)
 }
 
-func testDBLock(t *testing.T, db locker) {
-	var x int
+// TestDBLock verifies that Lock behaves correctly.
+// It is separate from [TestDB] because it can't be used
+// with a recorder/replayer, thanks to its sensitivity
+// to time.
+func TestDBLock(t *testing.T, db locker) {
 	db.Lock("abc")
+	c := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		db.Lock("abc")
-		x = 2 // cause race if not synchronized
+		close(c)
 		db.Unlock("abc")
 		wg.Done()
 	}()
-	x = 1 // cause race if not synchronized
-	db.Unlock("abc")
-	wg.Wait()
-	_ = x
 
-	func() {
-		defer func() {
-			recover()
-		}()
+	// The db.Lock in the goroutine should block, since the lock is already held.
+	select {
+	case <-c:
+		t.Fatal("Lock did not wait")
+	case <-time.After(1 * time.Second):
+	}
+
+	db.Unlock("abc")
+
+	// Now the db.Lock in the goroutine should return.
+	<-c
+	wg.Wait()
+
+	testutil.StopPanic(func() {
 		db.Unlock("def")
 		t.Errorf("Unlock never-locked key did not panic")
-	}()
-
+	})
 }

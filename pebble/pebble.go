@@ -1,3 +1,10 @@
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package pebble implements a storage.DB using Pebble,
+// a production-quality key-value database from CockroachDB.
+// A pebble database can only be opened by one process at a time.
 package pebble
 
 import (
@@ -7,7 +14,7 @@ import (
 	"log/slog"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/superryanguo/internal/storage"
+	"github.com/superryanguo/ryai/storage"
 )
 
 // Open opens an existing Pebble database in the named directory.
@@ -82,6 +89,9 @@ func (d *db) Panic(msg string, args ...any) {
 }
 
 func (d *db) Set(key, val []byte) {
+	if len(key) == 0 {
+		d.Panic("pebble set: empty key")
+	}
 	if err := d.p.Set(key, val, noSync); err != nil {
 		// unreachable except db error
 		d.Panic("pebble set", "key", storage.Fmt(key), "val", storage.Fmt(val), "err", err)
@@ -160,6 +170,9 @@ func (d *db) Batch() storage.Batch {
 }
 
 func (b *batch) Set(key, val []byte) {
+	if len(key) == 0 {
+		b.db.Panic("pebble batch set: empty key")
+	}
 	if err := b.b.Set(key, val, noSync); err != nil {
 		// unreachable except db error
 		b.db.Panic("pebble batch set", "key", storage.Fmt(key), "val", storage.Fmt(val), "err", err)
@@ -184,8 +197,12 @@ func (b *batch) DeleteRange(start, end []byte) {
 	}
 }
 
+// Pebble imposes a higher maximum batch size (4GB), but 100MB is fine.
+// That's also what storage.Batch's interface definition says is a “typical limit”.
+const maxBatch = 100e6
+
 func (b *batch) MaybeApply() bool {
-	if b.b.Len() > 100e6 {
+	if b.b.Len() > maxBatch {
 		b.Apply()
 		return true
 	}

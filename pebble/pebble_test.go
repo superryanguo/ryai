@@ -1,13 +1,18 @@
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package pebble
 
 import (
 	"encoding/binary"
 	"fmt"
 	"math/rand/v2"
+	"path/filepath"
 	"testing"
 
-	"rsc.io/gaby/internal/storage"
-	"rsc.io/gaby/internal/testutil"
+	"github.com/superryanguo/ryai/storage"
+	"github.com/superryanguo/ryai/testutil"
 )
 
 type testWriter struct{ t *testing.T }
@@ -20,30 +25,32 @@ func (w testWriter) Write(b []byte) (int, error) {
 func TestDB(t *testing.T) {
 	lg := testutil.Slogger(t)
 	dir := t.TempDir()
+	dbname := filepath.Join(dir, "db1")
 
-	db, err := Open(lg, dir+"/db1")
+	db, err := Open(lg, dbname)
 	if err == nil {
 		t.Fatal("Open nonexistent succeeded")
 	}
 
-	db, err = Create(lg, dir+"/db1")
+	db, err = Create(lg, dbname)
 	if err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
 
-	db, err = Create(lg, dir+"/db1")
+	db, err = Create(lg, dbname)
 	if err == nil {
 		t.Fatal("Create already-existing succeeded")
 	}
 
-	db, err = Open(lg, dir+"/db1")
+	db, err = Open(lg, dbname)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
 	storage.TestDB(t, db)
+	storage.TestDBLock(t, db)
 
 	if testing.Short() {
 		return

@@ -6,8 +6,9 @@ package storage
 
 import (
 	"cmp"
+	"iter"
 
-	"rsc.io/gaby/internal/llm"
+	"github.com/superryanguo/ryai/llm"
 )
 
 // A VectorDB is a vector database that implements
@@ -15,14 +16,31 @@ import (
 // corresponding to documents.
 type VectorDB interface {
 	// Set sets the vector associated with the given document ID to vec.
+	// The id argument must not be empty.
 	Set(id string, vec llm.Vector)
 
-	// TODO: Add Delete.
+	// Delete deletes any vector associated with document ID key.
+	// Delete of an unset key is a no-op.
+	Delete(id string)
 
 	// Get gets the vector associated with the given document ID.
 	// If no such document exists, Get returns nil, false.
 	// If a document exists, Get returns vec, true.
 	Get(id string) (llm.Vector, bool)
+
+	// All returns an iterator over all ID-vector pairs in the vector db.
+	// The second value in each iteration pair is a function returning a
+	// vector, not the vector itself:
+	//
+	//	for key, getVec := range vecdb.All() {
+	//		vec := getVec()
+	//		fmt.Printf("%q: %q\n", key, vec)
+	//	}
+	//
+	// The pairs are ordered in lexicographic order of IDs.
+	// In iterations that only need the keys or only need the vectors for a subset of keys,
+	// some VectorDB implementations may avoid work when the value function is not called.
+	All() iter.Seq2[string, func() llm.Vector]
 
 	// Batch returns a new [VectorBatch] that accumulates
 	// vector database mutations to apply in an atomic operation.
@@ -32,6 +50,9 @@ type VectorDB interface {
 	// Search searches the database for the n vectors
 	// most similar to vec, returning the document IDs
 	// and similarity scores.
+	//
+	// Normally a VectorDB is used entirely with vectors of a single length.
+	// Search ignores stored vectors with a different length than vec.
 	Search(vec llm.Vector, n int) []VectorResult
 
 	// Flush flushes storage to disk.
@@ -47,7 +68,9 @@ type VectorBatch interface {
 	// Set sets the vector associated with the given document ID to vec.
 	Set(id string, vec llm.Vector)
 
-	// TODO: Add Delete.
+	// Delete deletes any vector associated with document ID key.
+	// Delete of an unset key is a no-op.
+	Delete(id string)
 
 	// MaybeApply calls Apply if the VectorBatch is getting close to full.
 	// Every VectorBatch has a limit to how many operations can be batched,

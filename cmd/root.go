@@ -25,6 +25,7 @@ var rootCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("ryai cfgFile=%s\n", cfgFile)
 		logger.Info("Application started", slog.String("ryai cfgFile", cfgFile))
+		Run()
 	},
 }
 
@@ -78,4 +79,5 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
 	}
+	viper.BindEnv("log.level", "LOG_LEVEL")
 }

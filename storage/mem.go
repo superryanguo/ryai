@@ -12,16 +12,20 @@ import (
 	"slices"
 	"sync"
 
-	"rsc.io/gaby/internal/llm"
+	"github.com/superryanguo/ryai/llm"
 	"rsc.io/omap"
 	"rsc.io/ordered"
 	"rsc.io/top"
 )
 
-// A MemLocker is an single-process implementation
+// A MemLocker is a single-process implementation
 // of the database Lock and Unlock methods,
 // suitable if there is only one process accessing the
 // database at a time.
+//
+// The zero value for a MemLocker
+// is a valid MemLocker with no locks held.
+// It must not be copied after first use.
 type MemLocker struct {
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -43,7 +47,7 @@ func (l *MemLocker) Lock(name string) {
 	mu.Lock()
 }
 
-// Unlock locks the mutex with the given name.
+// Unlock unlocks the mutex with the given name.
 func (l *MemLocker) Unlock(name string) {
 	l.mu.Lock()
 	mu := l.locks[name]
@@ -83,7 +87,7 @@ func (db *memDB) Get(key []byte) (val []byte, ok bool) {
 	return v, ok
 }
 
-// Scan returns an iterator overall key-value pairs
+// Scan returns an iterator over all key-value pairs
 // in the range start ≤ key ≤ end.
 func (db *memDB) Scan(start, end []byte) iter.Seq2[[]byte, func() []byte] {
 	lo := string(start)
@@ -128,6 +132,9 @@ func (db *memDB) DeleteRange(start, end []byte) {
 
 // Set sets the value associated with key to val.
 func (db *memDB) Set(key, val []byte) {
+	if len(key) == 0 {
+		db.Panic("memdb set: empty key")
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -151,6 +158,9 @@ type memBatch struct {
 }
 
 func (b *memBatch) Set(key, val []byte) {
+	if len(key) == 0 {
+		b.db.Panic("memdb batch set: empty key")
+	}
 	k := string(key)
 	v := bytes.Clone(val)
 	b.ops = append(b.ops, func() { b.db.data.Set(k, v) })
@@ -178,6 +188,7 @@ func (b *memBatch) Apply() {
 	for _, op := range b.ops {
 		op()
 	}
+	b.ops = nil
 }
 
 // A memVectorDB is a VectorDB implementing in-memory search
@@ -188,7 +199,7 @@ type memVectorDB struct {
 	namespace string
 
 	mu    sync.RWMutex
-	cache map[string][]float32 // in-memory cache of all vectors, indexed by id
+	cache omap.Map[string, []float32] // in-memory cache of all vectors, indexed by id
 }
 
 // MemVectorDB returns a VectorDB that stores its vectors in db
@@ -210,22 +221,40 @@ type memVectorDB struct {
 //
 // where id is the document ID passed to Set.
 func MemVectorDB(db DB, lg *slog.Logger, namespace string) VectorDB {
-	// NOTE: The worst case score error in a dot product over 768 entries
-	// caused by quantization error of e is approximately 54e,
-	// so quantizing to int16s would only introduce a maximum score
-	// error of 0.00165, which would not change results significantly.
-	// So we could cut the memory per stored vector in half by
-	// quantizing to int16.
+	// NOTE: We could cut the memory per stored vector in half by quantizing to int16.
+	//
+	// The worst case score error in a dot product over 768 entries
+	// caused by quantization error of e is approximately 55.4 e:
+	//
+	// For a unit vector v of length N, the way to maximize Σ v[i] is to make
+	// all the vector entries the same value x, such that sqrt(N x²) = 1,
+	// so x = 1/sqrt(N). The maximum of Σ v[i] is therefore N/sqrt(N).
+	//
+	// Looking at the dot product error for v₁ · v₂ caused by adding
+	// quantization error vectors e₁ and e₂:
+	//
+	// 	|Σ v₁[i]*v₂[i] - Σ (v₁[i]+e₁[i])*(v₂[i]+e₂[i])| =
+	//	|Σ v₁[i]*v₂[i] - Σ (v₁[i]*v₂[i] + e₁[i]*v₂[i] + e₂[i]*v₁[i] + e₁[i]*e₂[i])| =
+	//	|Σ (e₁[i]*v₂[i] + e₂[i]*v₁[i] + e₁[i]*e₂[i])| ≤
+	//	Σ |e₁[i]*v₂[i]| + Σ |e₂[i]*v₁[i]| + Σ |e₁[i]*e₂[i]| ≤
+	//	e × (Σ v₁[i] + Σ v₂[i]) + N e² ≤
+	//	e × 2 × N/sqrt(N) + N e² =
+	//	e × (2 × N/sqrt(N) + e) ~= 55.4 e for N=768.
+	//
+	// Quantizing the float32 range [-1,+1] to int16 range [-32768,32767]
+	// would introduce a maximum quantization error e of
+	// ½ × (+1 - -1) / (32767 - -32768) = 1/65535 = 0.000015259,
+	// resulting in a maximum dot product error of approximately 0.00846,
+	// which would not change the result order significantly.
 
 	vdb := &memVectorDB{
 		storage:   db,
 		slog:      lg,
 		namespace: namespace,
-		cache:     make(map[string][]float32),
 	}
 
 	// Load all the previously-stored vectors.
-	vdb.cache = make(map[string][]float32)
+	clen := 0
 	for key, getVal := range vdb.storage.Scan(
 		ordered.Encode("llm.Vector", namespace),
 		ordered.Encode("llm.Vector", namespace, ordered.Inf)) {
@@ -242,33 +271,76 @@ func MemVectorDB(db DB, lg *slog.Logger, namespace string) VectorDB {
 		}
 		var vec llm.Vector
 		vec.Decode(val)
-		vdb.cache[id] = vec
+		vdb.cache.Set(id, vec)
+		clen++
 	}
 
-	vdb.slog.Info("loaded vectordb", "n", len(vdb.cache), "namespace", namespace)
+	vdb.slog.Info("loaded vectordb", "n", clen, "namespace", namespace)
 	return vdb
 }
 
 func (db *memVectorDB) Set(id string, vec llm.Vector) {
+	// No need to put db.storage.Set under db.mu.Lock() since
+	// it does its own locking. The other potentially problematic
+	// contention is between what is in db.storage and db.cache
+	// under several concurrent writes. This is only a problem
+	// when different routines put a different value for the same
+	// document, which is highly unlikely in practice.
+	if len(id) == 0 {
+		db.storage.Panic("memVectorDB set: empty ID")
+	}
 	db.storage.Set(ordered.Encode("llm.Vector", db.namespace, id), vec.Encode())
 
 	db.mu.Lock()
-	db.cache[id] = slices.Clone(vec)
+	db.cache.Set(id, slices.Clone(vec))
+	db.mu.Unlock()
+}
+
+func (db *memVectorDB) Delete(id string) {
+	db.storage.Delete(ordered.Encode("llm.Vector", db.namespace, id))
+
+	db.mu.Lock()
+	db.cache.Delete(id)
 	db.mu.Unlock()
 }
 
 func (db *memVectorDB) Get(name string) (llm.Vector, bool) {
 	db.mu.RLock()
-	vec, ok := db.cache[name]
+	vec, ok := db.cache.Get(name)
 	db.mu.RUnlock()
 	return vec, ok
+}
+
+// All returns all ID-vector pairs in lexicographic order of IDs.
+func (db *memVectorDB) All() iter.Seq2[string, func() llm.Vector] {
+	return func(yield func(key string, val func() llm.Vector) bool) {
+		db.mu.RLock()
+		locked := true
+		defer func() {
+			if locked {
+				db.mu.RUnlock()
+			}
+		}()
+		// Iterate through the cache since we have an invariant that
+		// both the cache and the underlying storage are synced.
+		for id, vec := range db.cache.All() {
+			val := func() llm.Vector { return vec }
+			db.mu.RUnlock()
+			locked = false
+			if !yield(id, val) {
+				return
+			}
+			db.mu.RLock()
+			locked = true
+		}
+	}
 }
 
 func (db *memVectorDB) Search(target llm.Vector, n int) []VectorResult {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	best := top.New(n, VectorResult.cmp)
-	for name, vec := range db.cache {
+	for name, vec := range db.cache.All() {
 		if len(vec) != len(target) {
 			continue
 		}
@@ -286,16 +358,28 @@ type memVectorBatch struct {
 	db *memVectorDB          // underlying memVectorDB
 	sb Batch                 // batch for underlying DB
 	w  map[string]llm.Vector // vectors to write
+	d  map[string]bool       // vectors to delete
 }
 
 func (db *memVectorDB) Batch() VectorBatch {
-	return &memVectorBatch{db, db.storage.Batch(), make(map[string]llm.Vector)}
+	return &memVectorBatch{db, db.storage.Batch(), make(map[string]llm.Vector), make(map[string]bool)}
 }
 
 func (b *memVectorBatch) Set(name string, vec llm.Vector) {
+	if len(name) == 0 {
+		b.db.storage.Panic("memVectorDB batch set: empty ID")
+	}
 	b.sb.Set(ordered.Encode("llm.Vector", b.db.namespace, name), vec.Encode())
 
+	delete(b.d, name)
 	b.w[name] = slices.Clone(vec)
+}
+
+func (b *memVectorBatch) Delete(name string) {
+	b.sb.Delete(ordered.Encode("llm.Vector", b.db.namespace, name))
+
+	delete(b.w, name)
+	b.d[name] = true
 }
 
 func (b *memVectorBatch) MaybeApply() bool {
@@ -313,7 +397,12 @@ func (b *memVectorBatch) Apply() {
 	defer b.db.mu.Unlock()
 
 	for name, vec := range b.w {
-		b.db.cache[name] = vec
+		b.db.cache.Set(name, vec)
 	}
 	clear(b.w)
+
+	for name := range b.d {
+		b.db.cache.Delete(name)
+	}
+	clear(b.d)
 }
