@@ -33,7 +33,7 @@ func (c LlmSet) String() string {
 }
 
 func (c RyaiConfig) String() string {
-	return fmt.Sprintf("Llm:\n%sLog:\n%s\n", c.Llm.String(), c.Log.String())
+	return fmt.Sprintf("\nLlm:\n%sLog:\n%s\n", c.Llm.String(), c.Log.String())
 }
 
 func ReadCfg() (cfg RyaiConfig, err error) {

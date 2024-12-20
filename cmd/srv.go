@@ -6,16 +6,17 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/superryanguo/ryai/config"
+	"log"
+	"log/slog"
+	"net/http"
+
 	"github.com/superryanguo/ryai/docs"
 	"github.com/superryanguo/ryai/llm"
 	"github.com/superryanguo/ryai/llmapp"
 	"github.com/superryanguo/ryai/ollama"
 	"github.com/superryanguo/ryai/secret"
 	"github.com/superryanguo/ryai/storage"
-	"log"
-	"log/slog"
-	"net/http"
+	"github.com/superryanguo/ryai/utils"
 )
 
 // Ryai own the runtime instance
@@ -35,29 +36,18 @@ type Ryai struct {
 }
 
 func Run() {
-	logger.Info("Srv is running...***...")
-	cfg, err := config.ReadCfg()
-	if err != nil {
-		logger.Error("Readconfig", "error", err)
-		return
-	}
-
-	fmt.Printf("RyaiConfig:%s", cfg)
-
-	level := new(slog.LevelVar)
-	if err = level.UnmarshalText([]byte(cfg.Log.Level)); err != nil {
-		log.Fatal(err)
-	}
+	logger.Info("Srv is running...***...***...***...***...***...")
 
 	g := &Ryai{
-		ctx: context.Background(),
-		//slog:      slog.New(gcphandler.New(level)),
-		slogLevel: level,
+		ctx:       context.Background(),
+		slog:      logger,
+		slogLevel: loglevel,
 		http:      http.DefaultClient,
 		addr:      "localhost:4229",
 	}
 
-	ai, err := ollama.NewClient(g.ctx, g.slog, g.http, g.addr, ollama.DefaultEmbeddingModel)
+	var osrv string
+	ai, err := ollama.NewClient(g.slog, g.http, osrv, ollama.DefaultEmbeddingModel)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -65,4 +55,29 @@ func Run() {
 	//g.llm = ai
 	//g.llmapp = llmapp.New(g.slog, ai, g.db)
 
+	var docs = []llm.EmbedDoc{
+		{Text: "for loops"},
+		{Text: "for all time, always"},
+	}
+
+	vecs, err := g.embed.EmbedDocs(g.ctx, docs)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("vecs:%v\n", vecs)
+	input := "how are you"
+	gai, err := ollama.NewClient(g.slog, g.http, osrv, ollama.DefaultGenModel)
+	if err != nil {
+		log.Fatal(err)
+	}
+	rsp, err := gai.Prompt(g.ctx, input)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Gai get rsp: %s\n", string(rsp))
+
+	utils.ShowJsonRsp(rsp)
+
+	//select {}
 }

@@ -5,17 +5,20 @@ package cmd
 
 import (
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/superryanguo/ryai/config"
 	"github.com/superryanguo/ryai/utils"
 )
 
 var (
-	cfgFile string
-	logger  *slog.Logger
+	cfgFile  string
+	logger   *slog.Logger
+	loglevel *slog.LevelVar
 )
 
 var rootCmd = &cobra.Command{
@@ -43,9 +46,6 @@ func init() {
 	rootCmd.PersistentFlags().BoolP("version", "v", false, "Print the version number")
 
 	rootCmd.AddCommand(versionCmd)
-
-	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
 }
 
 var versionCmd = &cobra.Command{
@@ -80,4 +80,19 @@ func initConfig() {
 		fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
 	}
 	viper.BindEnv("log.level", "LOG_LEVEL")
+	cfg, err := config.ReadCfg()
+	if err != nil {
+		logger.Error("Readconfig", "error", err)
+		return
+	}
+
+	fmt.Printf("\nRyaiConfig:%s", cfg)
+
+	loglevel = new(slog.LevelVar)
+	if err = loglevel.UnmarshalText([]byte(cfg.Log.Level)); err != nil {
+		log.Fatal(err)
+	}
+	///TODO: add the log file option
+	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: loglevel}))
+
 }

@@ -50,12 +50,15 @@ ryai-linux: main.go
 ryai-mac: main.go
 	cd ${MKFILE_DIR} && \
 	GOOS=darwin $(GOBUILD) -o $(RELEASE_DIR)/$@
+
+ut:
+	go test ./...
 test:
 	cd ${MKFILE_DIR}
 	go mod tidy
 	git diff --exit-code go.mod go.sum
 	go mod verify
-	go test -v -gcflags "all=-l" ${MKFILE_DIR}pkg/... ${TEST_FLAGS}
+	go test -v -gcflags "all=-l" ${MKFILE_DIR}... ${TEST_FLAGS}
 
 clean:
 	rm -rf ${RELEASE_DIR}

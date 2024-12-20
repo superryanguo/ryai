@@ -18,9 +18,14 @@ import (
 	"github.com/superryanguo/ryai/llm"
 )
 
-// NOTE: This package does not use third party packages for
-// querying ollama models to avoid bringing in their many dependencies.
-var DefaultEmbeddingModel = "mxbai-embed-large"
+const (
+	DefaultEmbeddingModel = "mxbai-embed-large"
+	EmbedUrl              = "/api/embed"
+	DefaultGenModel       = "llama3.2:3b"
+	GenUrl                = "/api/generate"
+	DefaultGenModel2      = "llama3"
+	maxBatch              = 512 // default physical batch size in ollama
+)
 
 // A Client represents a connection to Ollama.
 type Client struct {
@@ -34,7 +39,7 @@ type Client struct {
 // server is assumed to be hosted at http://127.0.0.1:11434.
 // The model is the model name to use for embedding.
 // A typical model for embedding is "mxbai-embed-large".
-func NewClient(ctx context.Context, lg *slog.Logger, hc *http.Client, server string, model string) (*Client, error) {
+func NewClient(lg *slog.Logger, hc *http.Client, server string, model string) (*Client, error) {
 	if server == "" {
 		host := os.Getenv("OLLAMA_HOST")
 		if host == "" {
@@ -49,12 +54,10 @@ func NewClient(ctx context.Context, lg *slog.Logger, hc *http.Client, server str
 	return &Client{slog: lg, hc: hc, url: u, model: model}, nil
 }
 
-const maxBatch = 512 // default physical batch size in ollama
-
 // EmbedDocs returns the vector embeddings for the docs,
 // implementing [llm.Embedder].
 func (c *Client) EmbedDocs(ctx context.Context, docs []llm.EmbedDoc) ([]llm.Vector, error) {
-	embedURL := c.url.JoinPath("/api/embed") // ollama embed endpoint
+	embedURL := c.url.JoinPath(EmbedUrl) // ollama embed endpoint
 	var vecs []llm.Vector
 	for docs := range slices.Chunk(docs, maxBatch) {
 		var inputs []string
@@ -70,6 +73,51 @@ func (c *Client) EmbedDocs(ctx context.Context, docs []llm.EmbedDoc) ([]llm.Vect
 		vecs = append(vecs, vs...)
 	}
 	return vecs, nil
+}
+
+func (c *Client) Prompt(ctx context.Context, input string) ([]byte, error) {
+	u := c.url.JoinPath(GenUrl)
+	rsp, err := prompt(ctx, c.hc, u, input, c.model)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func prompt(ctx context.Context, hc *http.Client, u *url.URL, inputs string, model string) ([]byte, error) {
+	ask := struct {
+		Model  string `json:"model"`
+		Input  string `json:"prompt"`
+		Stream bool   `json:"stream"`
+	}{
+		Model:  model,
+		Input:  inputs,
+		Stream: true,
+	}
+
+	erj, err := json.Marshal(ask)
+	if err != nil {
+		return nil, err
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(erj))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+
+	response, err := hc.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+
+	rsp, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
 }
 
 func embed(ctx context.Context, hc *http.Client, embedURL *url.URL, inputs []string, model string) ([]llm.Vector, error) {
