@@ -16,7 +16,7 @@ import (
 	"github.com/superryanguo/ryai/ollama"
 	"github.com/superryanguo/ryai/secret"
 	"github.com/superryanguo/ryai/storage"
-	"github.com/superryanguo/ryai/utils"
+	//"github.com/superryanguo/ryai/utils"
 )
 
 // Ryai own the runtime instance
@@ -65,7 +65,7 @@ func Run() {
 		log.Fatal(err)
 	}
 	fmt.Printf("vecs:%v\n", vecs)
-	input := "how are you"
+	input := "how about Donald Trump?"
 	gai, err := ollama.NewClient(g.slog, g.http, osrv, ollama.DefaultGenModel)
 	if err != nil {
 		log.Fatal(err)
@@ -76,8 +76,14 @@ func Run() {
 	}
 
 	fmt.Printf("Gai get rsp: %s\n", string(rsp))
+	s, err := ollama.AssembleRsp(rsp)
+	if err != nil {
 
-	utils.ShowJsonRsp(rsp)
+	}
+
+	fmt.Printf("AssembleRsp: %s\n", s)
+
+	//utils.ShowJsonRsp(rsp)
 
 	//select {}
 }

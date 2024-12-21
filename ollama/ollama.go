@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/superryanguo/ryai/llm"
 )
@@ -33,6 +34,29 @@ type Client struct {
 	hc    *http.Client
 	url   *url.URL // url of the ollama server
 	model string
+}
+
+type Response struct {
+	Model     string `json:"model"`
+	CreatedAt string `json:"created_at"`
+	Response  string `json:"response"`
+	Done      bool   `json:"done"`
+}
+
+func AssembleRsp(d []byte) (string, error) {
+	var s string
+	var err error
+
+	lines := strings.Split(string(d), "\n")
+	for _, line := range lines {
+		var resp Response
+		err = json.Unmarshal([]byte(line), &resp)
+		if err != nil {
+			return s, err
+		}
+		s += resp.Response
+	}
+	return s, nil
 }
 
 // NewClient returns a connection to Ollama server. If empty, the
