@@ -4,11 +4,13 @@ Copyright © 2024 superryanguo
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/superryanguo/ryai/docs"
 	"github.com/superryanguo/ryai/llm"
@@ -85,5 +87,38 @@ func Run() {
 
 	//utils.ShowJsonRsp(rsp)
 
-	//select {}
+	select {}
+}
+
+func Chat() {
+	scanner := bufio.NewScanner(os.Stdin)
+
+	for scanner.Scan() {
+		t := scanner.Text()
+		if t == "exit" {
+			break
+		}
+		chat(t)
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "error reading input: %v\n", err)
+	}
+}
+func chat(input string) {
+	ctx := context.Background()
+	ai, err := ollama.NewClient(logger, http.DefaultClient, "", ollama.DefaultGenModel)
+	if err != nil {
+		log.Fatal(err)
+	}
+	rsp, err := ai.Prompt(ctx, input)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	s, err := ollama.AssembleRsp(rsp)
+	if err != nil {
+	}
+
+	fmt.Printf("\033[32mAnswer: %s\033[0m\n", s)
 }

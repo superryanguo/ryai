@@ -46,6 +46,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolP("version", "v", false, "Print the version number")
 
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(chatCmd)
 }
 
 var versionCmd = &cobra.Command{
@@ -53,6 +54,15 @@ var versionCmd = &cobra.Command{
 	Short: "Print the version number",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("Version: %s, Built@%s\n", utils.Version, utils.BuildTime)
+	},
+}
+
+var chatCmd = &cobra.Command{
+	Use:   "chat",
+	Short: "Chat with the AI",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("Begin the chat loop with the AI, ctrl+c or exit to quit\n")
+		Chat()
 	},
 }
 

@@ -62,6 +62,7 @@ test:
 
 clean:
 	rm -rf ${RELEASE_DIR}
-
+chat: ryai
+	${RELEASE_DIR}/ryai chat
 run: ryai
 	${RELEASE_DIR}/ryai
