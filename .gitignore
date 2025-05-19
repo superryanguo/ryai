@@ -10,6 +10,7 @@
 *.swp
 *.swo
 bin/
+ryai
 
 # Test binary, built with `go test -c`
 *.test
